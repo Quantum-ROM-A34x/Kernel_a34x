@@ -18,7 +18,7 @@ tar xvzf ../clang-r536225.tar.gz
 rm ../clang-r536225.tar.gz
 cd ..
 cd kleaf
-sed -i '/# keep sorted/a\    "r536225",' versions.bzl
+sed -i '/"r510928",/a\    "r536225",' versions.bzl
 cat versions.bzl
 cd ..
 cd ../../../../
@@ -53,6 +53,9 @@ export PROJECT="mgk_64_k66"
 export MODE="user"
 export SOURCE_DATE_EPOCH="$(date +%s)"
 export SEC_BUILDNUMBER="ogkiA346BXXSFEZC7"
+
+export LTO="thin"
+export BAZEL_FLAGS="--config=autofdo --config=thinlto"
 
 chmod +x ./kernel_device_modules-6.6/build.sh
 ./kernel_device_modules-6.6/build.sh
