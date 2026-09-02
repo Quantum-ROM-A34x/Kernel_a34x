@@ -98,7 +98,6 @@ jobs:
         run: |
           cd ${{ env.G_KERNEL }}
           patch -p1 < ${{ env.G_EXT }}/patch/6.6/Dont_reduce_TTL.patch || true
-
           case "${{ env.KSU_VAR }}" in
             "KSUN-SUSFS"|"WILD-KERNEL-SUSFS"|"KSU-TIAN-SUSFS"|"SUKISU-SUSFS")
               patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
@@ -145,7 +144,6 @@ jobs:
               KSU_DIR="KernelSU"
               ;;
           esac
-
           if [ -n "$KSU_DIR" ] && [ -d "./$KSU_DIR" ]; then
             cd ./$KSU_DIR
             KSU_GIT_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "0")
@@ -297,8 +295,19 @@ jobs:
         run: |
           cp Image ${{ env.G_EXT }}/AnyKernel3/Image
           cd ${{ env.G_EXT }}/AnyKernel3
+          sed -i 's/device.name1=.*/device.name1=a34x/' anykernel.sh
+          sed -i 's/device.name2=.*/device.name2=a34xdd/' anykernel.sh
+          sed -i 's/device.name3=.*/device.name3=a34xeea/' anykernel.sh
+          sed -i 's/device.name4=.*/device.name4=a34/' anykernel.sh
+          sed -i 's/device.name5=.*/device.name5=SM-A346B/' anykernel.sh
+          sed -i 's/device.name6=.*/device.name6=SM-A346E/' anykernel.sh
+          sed -i 's/device.name7=.*/device.name7=SM-A346M/' anykernel.sh
+          sed -i 's/device.name8=.*/device.name8=SM-A346N/' anykernel.sh
+          sed -i 's/device.name9=.*/device.name9=SM-A3460/' anykernel.sh
+          sed -i 's/block=.*/block=auto;/' anykernel.sh
+          sed -i 's/is_slot_device=.*/is_slot_device=auto;/' anykernel.sh
           ZIP_NAME="AnyKernel3_${{ env.pkg_name }}.zip"
-          zip -r "${{ env.G_WORKSPACE }}/$ZIP_NAME" ./*
+          zip -r9 "${{ env.G_WORKSPACE }}/$ZIP_NAME" * -x .git README.md *placeholder
           echo "zip_name=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Upload dist artifact
