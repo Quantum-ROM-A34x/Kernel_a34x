@@ -163,83 +163,81 @@ jobs:
               ;;
           esac
 
-      - name: Configure KernelSU
+      - name: Patch Bazel (Kleaf) for KernelSU
         run: |
+          cd ${{ env.G_KERNEL }}
+          if [ -f "BUILD.bazel" ]; then
+            sed -i '/"drivers\/md\/\*\*",/a\        "drivers\/kernelsu\/\*\*",\n        "drivers\/kernelsu\/\*\*\/\*",\n        "fs\/kernelsu\/\*\*",\n        "fs\/kernelsu\/\*\*\/\*",' BUILD.bazel
+          fi
+          if [ -f "drivers/kernelsu/Makefile" ]; then
+            echo "ccflags-y += -fno-lto" >> drivers/kernelsu/Makefile
+            echo "ccflags-y += -fno-data-sections" >> drivers/kernelsu/Makefile
+            echo "ccflags-y += -fno-function-sections" >> drivers/kernelsu/Makefile
+          fi
+
+      - name: Configure KernelSU, IPSet & SUSFS (Aggressive Injection)
+        run: |
+          cd ${{ env.G_KERNEL }}
+          cat << 'EOF' > ksu_fragment.config
+          CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_MODULES=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=65534
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPMARK=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_IPMAC=y
+          CONFIG_IP_SET_HASH_MAC=y
+          CONFIG_IP_SET_HASH_NETPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_IP_SET_LIST_SET=y
+          EOF
           case "${{ env.KSU_VAR }}" in
-            "KSUN"|"WILD-KERNEL-SUSFS"|"KSUN-SUSFS"|"KSU-TIAN"*)
-              echo "CONFIG_KSU=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KPROBES=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KPROBE_EVENTS=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_MODULES=y" >> "${{ env.DEFCONFIG }}"
-              ;;
-            "SUKISU-SUSFS")
-              echo "CONFIG_KSU=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_DEBUG=n" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KPM=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KPROBES=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KPROBE_EVENTS=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_MODULES=y" >> "${{ env.DEFCONFIG }}"
-              ;;
-            "SUKISU")
-              echo "CONFIG_KSU=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_DEBUG=n" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KPM=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KPROBES=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KPROBE_EVENTS=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_MODULES=y" >> "${{ env.DEFCONFIG }}"
+            "SUKISU-SUSFS"|"SUKISU")
+              echo "CONFIG_KSU_DEBUG=n" >> ksu_fragment.config
+              echo "CONFIG_KPM=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> ksu_fragment.config
               ;;
           esac
-
-      - name: Configure IPSet Support
-        run: |
-          echo "CONFIG_IP_SET=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_MAX=65534" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_BITMAP_IP=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_BITMAP_IPMAC=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_BITMAP_PORT=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_IP=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_IPMARK=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_IPPORT=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_IPPORTIP=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_IPPORTNET=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_IPMAC=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_MAC=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_NETPORTNET=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_NET=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_NETNET=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_NETPORT=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_HASH_NETIFACE=y" >> "${{ env.DEFCONFIG }}"
-          echo "CONFIG_IP_SET_LIST_SET=y" >> "${{ env.DEFCONFIG }}"
-
-      - name: Configure SUSFS
-        run: |
+          case "${{ env.KSU_VAR }}" in
+            *-SUSFS*)
+              echo "CONFIG_KSU_SUSFS=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ksu_fragment.config
+              echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ksu_fragment.config
+              ;;
+          esac
           case "${{ env.KSU_VAR }}" in
             "KSUN-SUSFS"|"KSU-TIAN-SUSFS")
-              echo "CONFIG_KSU_SUSFS=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> "${{ env.DEFCONFIG }}"
+              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ksu_fragment.config
               ;;
             "WILD-KERNEL-SUSFS")
-              echo "CONFIG_KSU_SUSFS=y" >> "${{ env.DEFCONFIG }}"
-              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=n" >> "${{ env.DEFCONFIG }}"
-              ;;
-            "SUKISU-SUSFS")
-              echo "CONFIG_KSU_SUSFS=y" >> "${{ env.DEFCONFIG }}"
+              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=n" >> ksu_fragment.config
               ;;
           esac
+          find . -type f \( -name "gki_defconfig" -o -name "mediatek-bazel_defconfig" -o -name "sec_ogki_fragment.config" -o -name "mt6877_overlay.config" -o -name "mt6877_teegris_5_overlay.config" \) | while read -r config_file; do
+            cat ksu_fragment.config >> "$config_file"
+          done
 
       - name: Build Kernel
         run: |
@@ -306,6 +304,8 @@ jobs:
           sed -i 's/device.name9=.*/device.name9=SM-A3460/' anykernel.sh
           sed -i 's/block=.*/block=auto;/' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=auto;/' anykernel.sh
+          sed -i 's/dump_boot;/split_boot;/g' anykernel.sh
+          sed -i 's/write_boot;/flash_boot;/g' anykernel.sh
           ZIP_NAME="AnyKernel3_${{ env.pkg_name }}.zip"
           zip -r9 "${{ env.G_WORKSPACE }}/$ZIP_NAME" * -x .git README.md *placeholder
           echo "zip_name=$ZIP_NAME" >> $GITHUB_ENV
