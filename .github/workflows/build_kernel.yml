@@ -1,4 +1,4 @@
-name: Build Kernel (KernelSU)
+name: Build Kernel (KSUN + SUSFS)
 
 on:
   push:
@@ -15,20 +15,6 @@ on:
         type: boolean
         required: true
         default: false
-      ksu_variant:
-        description: "Choose KernelSU variant"
-        required: true
-        type: choice
-        options:
-          - NO-ROOT
-          - KSUN
-          - WILD-KERNEL-SUSFS
-          - KSUN-SUSFS
-          - KSU-TIAN
-          - KSU-TIAN-SUSFS
-          - SUKISU-SUSFS
-          - SUKISU
-        default: NO-ROOT
 
 permissions:
   contents: write
@@ -36,7 +22,6 @@ permissions:
 env:
   G_WORKSPACE: ${{ github.workspace }}
   G_EXT: ${{ github.workspace }}/external_deps
-  KSU_VAR: ${{ github.event.inputs.ksu_variant || 'NO-ROOT' }}
 
 jobs:
   build:
@@ -70,116 +55,51 @@ jobs:
           sudo rm -rf /usr/local
           mkdir -p ${{ env.G_EXT }}
 
-      - name: Clone Other Dependencies
+      - name: Clone Required Dependencies
         working-directory: ${{ env.G_EXT }}
         run: |
           git clone https://github.com/WildKernels/AnyKernel3.git -b "gki-2.0"
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6
-          git clone https://github.com/xnnnsets/kernel_patches.git
-          git clone https://github.com/xnnnsets/patch.git
-          git clone https://github.com/SukiSU-Ultra/SukiSU_patch.git
 
-      - name: Susfs4ksu (Source Copy)
+      - name: Setup SUSFS Kernel Source
         run: |
-          cd ${{ env.G_EXT }}/susfs4ksu
-          case "${{ env.KSU_VAR }}" in
-            "WILD-KERNEL-SUSFS"|"KSUN-SUSFS")
-              cp ./kernel_patches/include/linux/* ${{ env.G_KERNEL }}/include/linux/
-              cp ./kernel_patches/fs/* ${{ env.G_KERNEL }}/fs/
-              ;;
-            "KSU-TIAN-SUSFS"|"SUKISU-SUSFS")
-              git checkout "gki-android15-6.6"
-              cp ./kernel_patches/include/linux/* ${{ env.G_KERNEL }}/include/linux/
-              cp ./kernel_patches/fs/* ${{ env.G_KERNEL }}/fs/
-              ;;
-          esac
+          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* ${{ env.G_KERNEL }}/include/linux/
+          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* ${{ env.G_KERNEL }}/fs/
+          
+          cd ${{ env.G_KERNEL }}
+          patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
 
-      - name: Apply Patch susfs kernel
+      - name: Setup KernelSU-Next & Patch SUSFS
         run: |
           cd ${{ env.G_KERNEL }}
-          patch -p1 < ${{ env.G_EXT }}/patch/6.6/Dont_reduce_TTL.patch || true
-          case "${{ env.KSU_VAR }}" in
-            "KSUN-SUSFS"|"WILD-KERNEL-SUSFS"|"KSU-TIAN-SUSFS"|"SUKISU-SUSFS")
-              patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
-              ;;
-          esac
-          case "${{ env.KSU_VAR }}" in
-            "KSU-TIAN-SUSFS"|"SUKISU-SUSFS")
-              patch -p1 < ${{ env.G_EXT }}/kernel_patches/wild/susfs_fix_patches/v1.5.12/1_fix_base.c.patch || true
-              ;;
-          esac
-
-      - name: Add KernelSU
-        run: |
-          cd ${{ env.G_KERNEL }}
-          case "${{ env.KSU_VAR }}" in
-            "KSUN")
-              curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
-              KSU_DIR="KernelSU-Next"
-              ;;
-            "WILD-KERNEL-SUSFS")
-              curl -fLSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/next-susfs/kernel/setup.sh" | bash -s next-susfs
-              KSU_DIR="KernelSU-Next"
-              ;;
-            "KSUN-SUSFS")
-              curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
-              KSU_DIR="KernelSU-Next"
-              patch -p1 -d ./KernelSU-Next < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-              ;;
-            "KSU-TIAN-SUSFS")
-              curl -fLSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-              KSU_DIR="KernelSU"
-              patch -p1 -d ./KernelSU < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-              ;;
-            "KSU-TIAN")
-              curl -fLSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-              KSU_DIR="KernelSU"
-              ;;
-            "SUKISU-SUSFS")
-              curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
-              KSU_DIR="KernelSU"
-              ;;
-            "SUKISU")
-              curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -
-              KSU_DIR="KernelSU"
-              ;;
-          esac
-
-          # Fix SUSFS conflicts natively by injecting weak dummy variables
-          if [ -f "drivers/kernelsu/core/init.c" ]; then
-            sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' drivers/kernelsu/core/init.c || true
-            sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c || true
-            sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c || true
-          fi
-
+          curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+          
+          cd drivers/kernelsu
+          patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          
+          # Fix SUSFS conflicts natively by injecting weak dummy variables into init.c
+          sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' core/init.c || true
+          sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' core/init.c || true
+          sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' core/init.c || true
+          
           # Fix struct user_arg_ptr visibility for sulog in 6.6 kernels
-          if [ -f "drivers/kernelsu/sulog/event.h" ]; then
-            sed -i '1s/^/struct user_arg_ptr;\n/' drivers/kernelsu/sulog/event.h || true
-          fi
+          sed -i '1s/^/struct user_arg_ptr;\n/' sulog/event.h || true
+          
+          # Revert sucompat.c to upstream to bypass the incomplete struct error
+          git checkout feature/sucompat.c || git restore feature/sucompat.c || true
 
-          # Fix sucompat.c incompatible pointer type for ksu_sulog_capture_sucompat
-          if [ -f "drivers/kernelsu/feature/sucompat.c" ]; then
-            sed -i 's/ksu_sulog_capture_sucompat(\*filename_user, argv_user/ksu_sulog_capture_sucompat(*filename_user, \&(struct user_arg_ptr){ .ptr.native = argv_user }/g' drivers/kernelsu/feature/sucompat.c || true
-          fi
-
-          if [ -n "$KSU_DIR" ] && [ -d "./$KSU_DIR" ]; then
-            cd ./$KSU_DIR
-            KSU_GIT_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "0")
-            echo "KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.9.5")" >> $GITHUB_ENV
-            echo "KSU_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")" >> $GITHUB_ENV
-            echo "KSU_VERSION=$((30000 + KSU_GIT_VERSION))" >> $GITHUB_ENV
-          fi
+          KSU_GIT_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+          echo "KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.9.5")" >> $GITHUB_ENV
+          echo "KSU_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")" >> $GITHUB_ENV
+          echo "KSU_VERSION=$((30000 + KSU_GIT_VERSION))" >> $GITHUB_ENV
 
       - name: Remove GKI protected exports restriction
         run: |
-          case "${{ env.KSU_VAR }}" in
-            "WILD-KERNEL-SUSFS"|"KSUN-SUSFS"|"KSU-TIAN-SUSFS"|"SUKISU-SUSFS")
-              grep -rl "protected_exports_list" --include="BUILD.bazel" --exclude-dir=external_deps --exclude-dir=.git . 2>/dev/null | while read -r f; do
-                sed -i '/"protected_exports_list"\s*:\s*"android\/abi_gki_protected_exports_aarch64",\?/d' "$f"
-              done
-              find . -iname "abi_gki_protected_exports*" -not -path "./external_deps/*" -not -path "./.git/*" -delete 2>/dev/null || true
-              ;;
-          esac
+          cd ${{ env.G_KERNEL }}
+          grep -rl "protected_exports_list" --include="BUILD.bazel" . 2>/dev/null | while read -r f; do
+            sed -i '/"protected_exports_list"\s*:\s*"android\/abi_gki_protected_exports_aarch64",\?/d' "$f"
+          done
+          find . -iname "abi_gki_protected_exports*" -delete 2>/dev/null || true
 
       - name: Patch Bazel (Kleaf) for KernelSU
         run: |
@@ -194,7 +114,7 @@ jobs:
             echo "ccflags-y += -Wno-error" >> drivers/kernelsu/Makefile
           fi
 
-      - name: Configure KernelSU, IPSet & SUSFS (Aggressive Injection)
+      - name: Configure KernelSU, IPSet & SUSFS
         run: |
           cd ${{ env.G_KERNEL }}
           cat << 'EOF' > ksu_fragment.config
@@ -220,40 +140,23 @@ jobs:
           CONFIG_IP_SET_HASH_NETPORT=y
           CONFIG_IP_SET_HASH_NETIFACE=y
           CONFIG_IP_SET_LIST_SET=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SUS_SU=n
           EOF
-          case "${{ env.KSU_VAR }}" in
-            "SUKISU-SUSFS"|"SUKISU")
-              echo "CONFIG_KSU_DEBUG=n" >> ksu_fragment.config
-              echo "CONFIG_KPM=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> ksu_fragment.config
-              ;;
-          esac
-          case "${{ env.KSU_VAR }}" in
-            *-SUSFS*)
-              echo "CONFIG_KSU_SUSFS=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ksu_fragment.config
-              echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ksu_fragment.config
-              ;;
-          esac
-          case "${{ env.KSU_VAR }}" in
-            "KSUN-SUSFS"|"KSU-TIAN-SUSFS")
-              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ksu_fragment.config
-              ;;
-            "WILD-KERNEL-SUSFS")
-              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=n" >> ksu_fragment.config
-              ;;
-          esac
+          
           find . -type f \( -name "gki_defconfig" -o -name "mediatek-bazel_defconfig" -o -name "sec_ogki_fragment.config" -o -name "mt6877_overlay.config" -o -name "mt6877_teegris_5_overlay.config" \) | while read -r config_file; do
             cat ksu_fragment.config >> "$config_file"
           done
@@ -262,15 +165,8 @@ jobs:
         run: |
           KBUILD_FILE="${{ env.G_KERNEL }}/drivers/kernelsu/Kbuild"
           if [ -f "$KBUILD_FILE" ]; then
-            case "${{ env.KSU_VAR }}" in
-              "KSUN" | "WILD-KERNEL-SUSFS" | "KSUN-SUSFS")
-                sed -i "s/KSU_VERSION_FALLBACK := [0-9]\+/KSU_VERSION_FALLBACK := ${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
-                sed -i "s/KSU_VERSION_TAG_FALLBACK := .*/KSU_VERSION_TAG_FALLBACK := ${{ env.KSU_GIT_TAG }}/" "$KBUILD_FILE"
-                ;;
-              "KSU-TIAN" | "KSU-TIAN-SUSFS")
-                sed -i "s/-DKSU_VERSION=[0-9]\+/-DKSU_VERSION=${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
-                ;;
-            esac
+            sed -i "s/KSU_VERSION_FALLBACK := [0-9]\+/KSU_VERSION_FALLBACK := ${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
+            sed -i "s/KSU_VERSION_TAG_FALLBACK := .*/KSU_VERSION_TAG_FALLBACK := ${{ env.KSU_GIT_TAG }}/" "$KBUILD_FILE"
           fi
           chmod +x ./build_kernel.sh
           bash build_kernel.sh
@@ -300,13 +196,13 @@ jobs:
           echo "osrc_release=$OSRC_RELEASE" >> build_info.txt
           echo "asb_level=$ASB_LEVEL" >> build_info.txt
           echo "kernel_release=$KERNEL_VERSION" >> build_info.txt
-          echo "ksu_variant=${{ env.KSU_VAR }}" >> build_info.txt
+          echo "ksu_variant=KSUN-SUSFS" >> build_info.txt
           echo "$(grep 'BRANCH=' "${{ env.G_KERNEL }}/build.config.common")" >> build_info.txt
           echo "$(grep 'KMI_GENERATION=' "${{ env.G_KERNEL }}/build.config.common")" >> build_info.txt
 
       - name: Compute release filename
         run: |
-          echo "pkg_name=${{ env.KSU_VAR }}_a34x_${{ env.kernel_release }}_${{ env.asb_level }}_${{ env.osrc_release }}" >> $GITHUB_ENV
+          echo "pkg_name=KSUN-SUSFS_a34x_${{ env.kernel_release }}_${{ env.asb_level }}_${{ env.osrc_release }}" >> $GITHUB_ENV
 
       - name: Build AnyKernel3 zip
         run: |
@@ -332,19 +228,19 @@ jobs:
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dist-dir-${{ env.KSU_VAR }}
+          name: dist-dir-KSUN-SUSFS
           path: dist
 
       - name: Upload Image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-image-${{ env.KSU_VAR }}
+          name: kernel-image-KSUN-SUSFS
           path: Image
 
       - name: Upload AnyKernel3 zip artifact
         uses: actions/upload-artifact@v4
         with:
-          name: anykernel3-zip-${{ env.KSU_VAR }}
+          name: anykernel3-zip-KSUN-SUSFS
           path: "${{ env.zip_name }}"
 
       - name: Upload release assets
@@ -354,7 +250,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: "${{ env.pkg_name }}"
-          name: "${{ env.KSU_VAR }} - ${{ env.kernel_release }} - ${{ env.asb_level }} - ${{ env.osrc_release }}"
+          name: "KSUN-SUSFS - ${{ env.kernel_release }} - ${{ env.asb_level }} - ${{ env.osrc_release }}"
           files: |
             Image
             Image.sha256sum
@@ -369,5 +265,5 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
             -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -F document=@"${{ env.zip_name }}" \
-            -F caption="Build success — ${{ env.KSU_VAR }} — ${{ github.sha }}" \
+            -F caption="Build success — KSUN-SUSFS — ${{ github.sha }}" \
             -F parse_mode="Markdown"
