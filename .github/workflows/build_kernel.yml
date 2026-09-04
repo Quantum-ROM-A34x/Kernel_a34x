@@ -84,21 +84,22 @@ jobs:
           # Clone latest KernelSU-Next
           curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
           
-          cd KernelSU-Next
-          # Apply the official SUSFS patch for KSU
-          patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          # Apply the official SUSFS patch directly to the drivers folder
+          patch -p1 -d drivers/kernelsu < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
           
           # Fix 1: Resolve removed 'ksu_late_loaded' and 'ksu_lsm_hook' functions in upstream KSUN
-          sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' core/init.c || true
-          sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' core/init.c || true
-          sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' core/init.c || true
+          sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' drivers/kernelsu/core/init.c
+          sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c
+          sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c
           
           # Fix 2: Remove the broken 'ksu_sulog_capture_sucompat' line injected by the SUSFS patch.
-          # This causes an incomplete 'struct user_arg_ptr' compiler error on new KSUN code.
-          # Deleting it fixes compilation instantly without affecting root or hiding capabilities.
-          sed -i '/ksu_sulog_capture_sucompat/d' feature/sucompat.c || true
+          sed -i '/ksu_sulog_capture_sucompat/d' drivers/kernelsu/feature/sucompat.c
+          
+          # Fix 3: Ensure struct visibility
+          sed -i '1s/^/struct user_arg_ptr;\n/' drivers/kernelsu/sulog/event.h || true
           
           # Setup Environment Variables
+          cd KernelSU-Next
           KSU_GIT_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "0")
           echo "KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.9.5")" >> $GITHUB_ENV
           echo "KSU_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")" >> $GITHUB_ENV
