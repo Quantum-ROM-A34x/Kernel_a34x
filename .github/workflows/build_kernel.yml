@@ -145,9 +145,9 @@ jobs:
               ;;
           esac
 
-          # Fix SUSFS conflicts in init.c natively by injecting dummy variables
+          # Fix SUSFS conflicts natively by injecting weak dummy variables
           if [ -f "drivers/kernelsu/core/init.c" ]; then
-            sed -i '1s/^/#include <linux\/types.h>\nbool ksu_late_loaded = false;\nvoid ksu_lsm_hook_init(void) {}\nvoid ksu_lsm_hook_exit(void) {}\n/' drivers/kernelsu/core/init.c || true
+            sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' drivers/kernelsu/core/init.c || true
             sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c || true
             sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c || true
           fi
@@ -155,6 +155,11 @@ jobs:
           # Fix struct user_arg_ptr visibility for sulog in 6.6 kernels
           if [ -f "drivers/kernelsu/sulog/event.h" ]; then
             sed -i '1s/^/struct user_arg_ptr;\n/' drivers/kernelsu/sulog/event.h || true
+          fi
+
+          # Fix sucompat.c incompatible pointer type for ksu_sulog_capture_sucompat
+          if [ -f "drivers/kernelsu/feature/sucompat.c" ]; then
+            sed -i 's/ksu_sulog_capture_sucompat(\*filename_user, argv_user/ksu_sulog_capture_sucompat(*filename_user, \&(struct user_arg_ptr){ .ptr.native = argv_user }/g' drivers/kernelsu/feature/sucompat.c || true
           fi
 
           if [ -n "$KSU_DIR" ] && [ -d "./$KSU_DIR" ]; then
