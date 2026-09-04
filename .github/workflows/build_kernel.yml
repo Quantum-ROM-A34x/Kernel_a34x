@@ -1,4 +1,4 @@
-name: Build Kernel (KSUN + SUSFS)
+name: Build Kernel (Latest KSUN + SUSFS)
 
 on:
   push:
@@ -22,6 +22,7 @@ permissions:
 env:
   G_WORKSPACE: ${{ github.workspace }}
   G_EXT: ${{ github.workspace }}/external_deps
+  KSU_VAR: KSUN-SUSFS
 
 jobs:
   build:
@@ -60,34 +61,44 @@ jobs:
         run: |
           git clone https://github.com/WildKernels/AnyKernel3.git -b "gki-2.0"
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6
+          git clone https://github.com/xnnnsets/patch.git
 
-      - name: Setup SUSFS Kernel Source
+      - name: Apply SUSFS Kernel Patches
         run: |
-          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* ${{ env.G_KERNEL }}/include/linux/
-          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* ${{ env.G_KERNEL }}/fs/
+          cd ${{ env.G_KERNEL }}
           
-          cd ${{ env.G_KERNEL }}
+          # Copy SUSFS files to kernel tree
+          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* include/linux/
+          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* fs/
+          
+          # Apply SUSFS kernel patch
           patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
+          
+          # Apply TTL patch
+          patch -p1 < ${{ env.G_EXT }}/patch/6.6/Dont_reduce_TTL.patch || true
 
-      - name: Setup KernelSU-Next & Patch SUSFS
+      - name: Add KernelSU-Next & Patch SUSFS
         run: |
           cd ${{ env.G_KERNEL }}
+          
+          # Clone latest KernelSU-Next
           curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
           
-          cd drivers/kernelsu
+          cd KernelSU-Next
+          # Apply the official SUSFS patch for KSU
           patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
           
-          # Fix SUSFS conflicts natively by injecting weak dummy variables into init.c
+          # Fix 1: Resolve removed 'ksu_late_loaded' and 'ksu_lsm_hook' functions in upstream KSUN
           sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' core/init.c || true
           sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' core/init.c || true
           sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' core/init.c || true
           
-          # Fix struct user_arg_ptr visibility for sulog in 6.6 kernels
-          sed -i '1s/^/struct user_arg_ptr;\n/' sulog/event.h || true
+          # Fix 2: Remove the broken 'ksu_sulog_capture_sucompat' line injected by the SUSFS patch.
+          # This causes an incomplete 'struct user_arg_ptr' compiler error on new KSUN code.
+          # Deleting it fixes compilation instantly without affecting root or hiding capabilities.
+          sed -i '/ksu_sulog_capture_sucompat/d' feature/sucompat.c || true
           
-          # Revert sucompat.c to upstream to bypass the incomplete struct error
-          git checkout feature/sucompat.c || git restore feature/sucompat.c || true
-
+          # Setup Environment Variables
           KSU_GIT_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "0")
           echo "KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.9.5")" >> $GITHUB_ENV
           echo "KSU_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")" >> $GITHUB_ENV
@@ -114,7 +125,7 @@ jobs:
             echo "ccflags-y += -Wno-error" >> drivers/kernelsu/Makefile
           fi
 
-      - name: Configure KernelSU, IPSet & SUSFS
+      - name: Configure KernelSU, IPSet & SUSFS (Aggressive Injection)
         run: |
           cd ${{ env.G_KERNEL }}
           cat << 'EOF' > ksu_fragment.config
@@ -196,13 +207,13 @@ jobs:
           echo "osrc_release=$OSRC_RELEASE" >> build_info.txt
           echo "asb_level=$ASB_LEVEL" >> build_info.txt
           echo "kernel_release=$KERNEL_VERSION" >> build_info.txt
-          echo "ksu_variant=KSUN-SUSFS" >> build_info.txt
+          echo "ksu_variant=${{ env.KSU_VAR }}" >> build_info.txt
           echo "$(grep 'BRANCH=' "${{ env.G_KERNEL }}/build.config.common")" >> build_info.txt
           echo "$(grep 'KMI_GENERATION=' "${{ env.G_KERNEL }}/build.config.common")" >> build_info.txt
 
       - name: Compute release filename
         run: |
-          echo "pkg_name=KSUN-SUSFS_a34x_${{ env.kernel_release }}_${{ env.asb_level }}_${{ env.osrc_release }}" >> $GITHUB_ENV
+          echo "pkg_name=${{ env.KSU_VAR }}_a34x_${{ env.kernel_release }}_${{ env.asb_level }}_${{ env.osrc_release }}" >> $GITHUB_ENV
 
       - name: Build AnyKernel3 zip
         run: |
@@ -228,19 +239,19 @@ jobs:
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dist-dir-KSUN-SUSFS
+          name: dist-dir-${{ env.KSU_VAR }}
           path: dist
 
       - name: Upload Image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-image-KSUN-SUSFS
+          name: kernel-image-${{ env.KSU_VAR }}
           path: Image
 
       - name: Upload AnyKernel3 zip artifact
         uses: actions/upload-artifact@v4
         with:
-          name: anykernel3-zip-KSUN-SUSFS
+          name: anykernel3-zip-${{ env.KSU_VAR }}
           path: "${{ env.zip_name }}"
 
       - name: Upload release assets
@@ -250,7 +261,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: "${{ env.pkg_name }}"
-          name: "KSUN-SUSFS - ${{ env.kernel_release }} - ${{ env.asb_level }} - ${{ env.osrc_release }}"
+          name: "${{ env.KSU_VAR }} - ${{ env.kernel_release }} - ${{ env.asb_level }} - ${{ env.osrc_release }}"
           files: |
             Image
             Image.sha256sum
@@ -265,5 +276,5 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
             -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -F document=@"${{ env.zip_name }}" \
-            -F caption="Build success — KSUN-SUSFS — ${{ github.sha }}" \
+            -F caption="Build success — ${{ env.KSU_VAR }} — ${{ github.sha }}" \
             -F parse_mode="Markdown"
