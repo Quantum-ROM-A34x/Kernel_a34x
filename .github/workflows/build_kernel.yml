@@ -154,8 +154,12 @@ jobs:
           if [ -f "drivers/kernelsu/core/init.c" ]; then
             sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c || true
             sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c || true
-            sed -i 's/ksu_lsm_hook_exit()/\/\/ksu_lsm_hook_exit()/g' drivers/kernelsu/core/init.c || true
-            sed -i 's/if (!ksu_late_loaded)/if (1)/g' drivers/kernelsu/core/init.c || true
+            sed -i 's/ksu_lsm_hook_init();/\/\/ksu_lsm_hook_init();/g' drivers/kernelsu/core/init.c || true
+            sed -i 's/ksu_lsm_hook_exit();/\/\/ksu_lsm_hook_exit();/g' drivers/kernelsu/core/init.c || true
+            sed -i 's/ksu_late_loaded = false;//g' drivers/kernelsu/core/init.c || true
+            sed -i 's/ksu_late_loaded = true;//g' drivers/kernelsu/core/init.c || true
+            sed -i 's/if (ksu_late_loaded)/if (1)/g' drivers/kernelsu/core/init.c || true
+            sed -i 's/if (!ksu_late_loaded)/if (0)/g' drivers/kernelsu/core/init.c || true
             sed -i 's/extern bool ksu_late_loaded;//g' drivers/kernelsu/core/init.c || true
           fi
 
