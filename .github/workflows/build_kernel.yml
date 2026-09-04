@@ -120,11 +120,17 @@ jobs:
             "WILD-KERNEL-SUSFS")
               curl -fLSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/next-susfs/kernel/setup.sh" | bash -s next-susfs
               KSU_DIR="KernelSU-Next"
+              patch -p1 -d ./KernelSU-Next < ${{ env.G_EXT }}/kernel_patches/wild/susfs_fix_patches/v1.5.12/fix_core_hook.c.patch || true
+              patch -p1 -d ./KernelSU-Next < ${{ env.G_EXT }}/kernel_patches/wild/susfs_fix_patches/v1.5.12/fix_sucompat.c.patch || true
+              patch -p1 -d ./KernelSU-Next < ${{ env.G_EXT }}/kernel_patches/wild/susfs_fix_patches/v1.5.12/fix_kernel_compat.c.patch || true
               ;;
             "KSUN-SUSFS")
               curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
               KSU_DIR="KernelSU-Next"
               patch -p1 -d ./KernelSU-Next < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+              patch -p1 -d ./KernelSU-Next < ${{ env.G_EXT }}/kernel_patches/wild/susfs_fix_patches/v1.5.12/fix_core_hook.c.patch || true
+              patch -p1 -d ./KernelSU-Next < ${{ env.G_EXT }}/kernel_patches/wild/susfs_fix_patches/v1.5.12/fix_sucompat.c.patch || true
+              patch -p1 -d ./KernelSU-Next < ${{ env.G_EXT }}/kernel_patches/wild/susfs_fix_patches/v1.5.12/fix_kernel_compat.c.patch || true
               ;;
             "KSU-TIAN-SUSFS")
               curl -fLSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
@@ -144,6 +150,14 @@ jobs:
               KSU_DIR="KernelSU"
               ;;
           esac
+
+          if [ -f "drivers/kernelsu/core/init.c" ]; then
+            sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c || true
+            sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c || true
+            sed -i 's/ksu_lsm_hook_exit()/\/\/ksu_lsm_hook_exit()/g' drivers/kernelsu/core/init.c || true
+            sed -i 's/if (!ksu_late_loaded)/if (1)/g' drivers/kernelsu/core/init.c || true
+            sed -i 's/extern bool ksu_late_loaded;//g' drivers/kernelsu/core/init.c || true
+          fi
 
           if [ -n "$KSU_DIR" ] && [ -d "./$KSU_DIR" ]; then
             cd ./$KSU_DIR
