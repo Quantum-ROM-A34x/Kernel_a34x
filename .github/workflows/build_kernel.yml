@@ -1,4 +1,4 @@
-name: Build Kernel (Latest KSUN + SUSFS)
+name: Build Kernel (Unified KSU / KSUN / ReSukiSU)
 
 on:
   push:
@@ -15,6 +15,19 @@ on:
         type: boolean
         required: true
         default: false
+      ksu_variant:
+        description: "Choose Root Variant"
+        required: true
+        type: choice
+        options:
+          - NO-ROOT
+          - KSU
+          - KSU-SUSFS
+          - KSUN
+          - KSUN-SUSFS
+          - RESUKISU
+          - RESUKISU-SUSFS
+        default: NO-ROOT
 
 permissions:
   contents: write
@@ -22,7 +35,7 @@ permissions:
 env:
   G_WORKSPACE: ${{ github.workspace }}
   G_EXT: ${{ github.workspace }}/external_deps
-  KSU_VAR: KSUN-SUSFS
+  KSU_VAR: ${{ github.event.inputs.ksu_variant || 'NO-ROOT' }}
 
 jobs:
   build:
@@ -34,21 +47,21 @@ jobs:
           submodules: true
           fetch-depth: 1
 
-      - name: Detect kernel source directory
+      - name: Detect Kernel Directory
         run: |
           if [ -f "Kernel-6.6/Makefile" ]; then
             REAL_DIR="Kernel-6.6"
           elif [ -f "kernel-6.6/Makefile" ]; then
             REAL_DIR="kernel-6.6"
           else
+            echo "Error: kernel-6.6 directory not found!"
             exit 1
           fi
           echo "G_KERNEL=${{ github.workspace }}/$REAL_DIR" >> $GITHUB_ENV
-          echo "DEFCONFIG=$REAL_DIR/arch/arm64/configs/gki_defconfig" >> $GITHUB_ENV
           rm -f kernel/kernel-6.6
           ln -sfn "../$REAL_DIR" kernel/kernel-6.6
 
-      - name: Cleanup & Setup External Deps
+      - name: Cleanup Ubuntu Environment
         run: |
           sudo apt-get remove --purge -y "php*" "dotnet*" "mysql*" "nodejs*" "clang*" "google*"
           sudo apt-get autoremove -y
@@ -60,65 +73,81 @@ jobs:
         working-directory: ${{ env.G_EXT }}
         run: |
           git clone https://github.com/WildKernels/AnyKernel3.git -b "gki-2.0"
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6
           git clone https://github.com/xnnnsets/patch.git
+          if [[ "${{ env.KSU_VAR }}" == *"-SUSFS" ]]; then
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6
+          fi
 
-      - name: Apply SUSFS Kernel Patches
+      - name: Inject Root Source (KSU / KSUN / ReSukiSU)
+        if: ${{ env.KSU_VAR != 'NO-ROOT' }}
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # Copy SUSFS files to kernel tree
-          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* include/linux/
-          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* fs/
-          
-          # Apply SUSFS kernel patch
-          patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
-          
-          # Apply TTL patch
-          patch -p1 < ${{ env.G_EXT }}/patch/6.6/Dont_reduce_TTL.patch || true
+          # Download requested Root Manager source
+          case "${{ env.KSU_VAR }}" in
+            KSU*)
+              curl -fLSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+              ;;
+            KSUN*)
+              curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+              ;;
+            RESUKISU*)
+              curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
+              ;;
+          esac
 
-      - name: Add KernelSU-Next & Patch SUSFS
-        run: |
-          cd ${{ env.G_KERNEL }}
-          
-          # Clone latest KernelSU-Next
-          curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
-          
-          # Apply the official SUSFS patch directly to the drivers folder
-          patch -p1 -d drivers/kernelsu < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-          
-          # Fix 1: Resolve removed 'ksu_late_loaded' and 'ksu_lsm_hook' functions in upstream KSUN
-          sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' drivers/kernelsu/core/init.c
-          sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c
-          sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c
-          
-          # Fix 2: Remove the broken 'ksu_sulog_capture_sucompat' line injected by the SUSFS patch.
-          sed -i '/ksu_sulog_capture_sucompat/d' drivers/kernelsu/feature/sucompat.c
-          
-          # Fix 3: Ensure struct visibility
-          sed -i '1s/^/struct user_arg_ptr;\n/' drivers/kernelsu/sulog/event.h || true
-          
-          # Setup Environment Variables
-          cd KernelSU-Next
+          # Secure variables for AnyKernel versioning
+          cd drivers/kernelsu
           KSU_GIT_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "0")
           echo "KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.9.5")" >> $GITHUB_ENV
-          echo "KSU_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")" >> $GITHUB_ENV
           echo "KSU_VERSION=$((30000 + KSU_GIT_VERSION))" >> $GITHUB_ENV
 
-      - name: Remove GKI protected exports restriction
+      - name: Apply SUSFS Patches & Fix C Compilation
+        if: ${{ contains(env.KSU_VAR, '-SUSFS') }}
         run: |
           cd ${{ env.G_KERNEL }}
+          
+          # 1. Apply Base SUSFS Kernel Patches
+          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* include/linux/
+          cp ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* fs/
+          patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
+          patch -p1 < ${{ env.G_EXT }}/patch/6.6/Dont_reduce_TTL.patch || true
+          
+          # 2. Apply SUSFS Root Patches
+          patch -p1 -d drivers/kernelsu < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          
+          # 3. Flawless C Compiler Fixes (Prevents Bazel -Werror panics)
+          # Inject Weak Dummy Variables into init.c
+          sed -i '1i#include <linux/types.h>' drivers/kernelsu/core/init.c || true
+          sed -i '1i__attribute__((weak)) bool ksu_late_loaded = false;' drivers/kernelsu/core/init.c || true
+          sed -i '1i__attribute__((weak)) void ksu_lsm_hook_init(void) {}' drivers/kernelsu/core/init.c || true
+          sed -i '1i__attribute__((weak)) void ksu_lsm_hook_exit(void) {}' drivers/kernelsu/core/init.c || true
+          sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c || true
+          sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c || true
+          
+          # Delete the broken sulog hook that causes 'struct user_arg_ptr' errors in sucompat.c
+          sed -i '/ksu_sulog_capture_sucompat/d' drivers/kernelsu/feature/sucompat.c || true
+          
+          # Ensure struct visibility in header
+          sed -i '1istruct user_arg_ptr;' drivers/kernelsu/sulog/event.h || true
+
+      - name: Patch Bazel (Kleaf) Sandboxing & Overrides
+        if: ${{ env.KSU_VAR != 'NO-ROOT' }}
+        run: |
+          cd ${{ env.G_KERNEL }}
+          
+          # Allow Bazel to compile the drivers/kernelsu directory
+          if [ -f "BUILD.bazel" ]; then
+            sed -i '/"drivers\/md\/\*\*",/a\        "drivers\/kernelsu\/\*\*",\n        "drivers\/kernelsu\/\*\*\/\*",\n        "fs\/kernelsu\/\*\*",\n        "fs\/kernelsu\/\*\*\/\*",' BUILD.bazel
+          fi
+          
+          # Strip GKI ABI monitoring constraints to prevent link failures
           grep -rl "protected_exports_list" --include="BUILD.bazel" . 2>/dev/null | while read -r f; do
             sed -i '/"protected_exports_list"\s*:\s*"android\/abi_gki_protected_exports_aarch64",\?/d' "$f"
           done
           find . -iname "abi_gki_protected_exports*" -delete 2>/dev/null || true
-
-      - name: Patch Bazel (Kleaf) for KernelSU
-        run: |
-          cd ${{ env.G_KERNEL }}
-          if [ -f "BUILD.bazel" ]; then
-            sed -i '/"drivers\/md\/\*\*",/a\        "drivers\/kernelsu\/\*\*",\n        "drivers\/kernelsu\/\*\*\/\*",\n        "fs\/kernelsu\/\*\*",\n        "fs\/kernelsu\/\*\*\/\*",' BUILD.bazel
-          fi
+          
+          # Force compiler to ignore non-fatal warnings
           if [ -f "drivers/kernelsu/Makefile" ]; then
             echo "ccflags-y += -fno-lto" >> drivers/kernelsu/Makefile
             echo "ccflags-y += -fno-data-sections" >> drivers/kernelsu/Makefile
@@ -126,7 +155,8 @@ jobs:
             echo "ccflags-y += -Wno-error" >> drivers/kernelsu/Makefile
           fi
 
-      - name: Configure KernelSU, IPSet & SUSFS (Aggressive Injection)
+      - name: Inject Unified Configuration Fragment
+        if: ${{ env.KSU_VAR != 'NO-ROOT' }}
         run: |
           cd ${{ env.G_KERNEL }}
           cat << 'EOF' > ksu_fragment.config
@@ -152,6 +182,16 @@ jobs:
           CONFIG_IP_SET_HASH_NETPORT=y
           CONFIG_IP_SET_HASH_NETIFACE=y
           CONFIG_IP_SET_LIST_SET=y
+          EOF
+          
+          if [[ "${{ env.KSU_VAR }}" == *"RESUKISU"* ]]; then
+            echo "CONFIG_KSU_DEBUG=n" >> ksu_fragment.config
+            echo "CONFIG_KPM=y" >> ksu_fragment.config
+            echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> ksu_fragment.config
+          fi
+          
+          if [[ "${{ env.KSU_VAR }}" == *"-SUSFS" ]]; then
+            cat << 'EOF' >> ksu_fragment.config
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
@@ -168,57 +208,38 @@ jobs:
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_KSU_SUSFS_SUS_SU=n
           EOF
-          
+          fi
+
           find . -type f \( -name "gki_defconfig" -o -name "mediatek-bazel_defconfig" -o -name "sec_ogki_fragment.config" -o -name "mt6877_overlay.config" -o -name "mt6877_teegris_5_overlay.config" \) | while read -r config_file; do
             cat ksu_fragment.config >> "$config_file"
           done
 
-      - name: Build Kernel
+      - name: Execute Bazel Build
         run: |
-          KBUILD_FILE="${{ env.G_KERNEL }}/drivers/kernelsu/Kbuild"
+          cd ${{ env.G_KERNEL }}
+          KBUILD_FILE="drivers/kernelsu/Kbuild"
           if [ -f "$KBUILD_FILE" ]; then
             sed -i "s/KSU_VERSION_FALLBACK := [0-9]\+/KSU_VERSION_FALLBACK := ${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
             sed -i "s/KSU_VERSION_TAG_FALLBACK := .*/KSU_VERSION_TAG_FALLBACK := ${{ env.KSU_GIT_TAG }}/" "$KBUILD_FILE"
+            sed -i "s/-DKSU_VERSION=[0-9]\+/-DKSU_VERSION=${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
           fi
-          chmod +x ./build_kernel.sh
-          bash build_kernel.sh
+          
+          chmod +x ../build_kernel.sh
+          bash ../build_kernel.sh
 
-      - name: Copy kernel image
+      - name: Extract Artifacts & Package AnyKernel3
         run: |
-          cp out/target/product/a34x/obj/KLEAF_OBJ/dist/kernel_device_modules-6.6/mgk_64_k66_kernel_aarch64.user/Image Image
-          sha256sum Image >> Image.sha256sum
-
-      - name: Move out directory
-        run: |
-          mv out/target/product/a34x/obj/KLEAF_OBJ/dist .
-          tar -czvf dist.tar.gz -C dist .
-
-      - name: Extract the config file from a kernel image
-        run: |
-          bash "${{ env.G_KERNEL }}/scripts/extract-ikconfig" Image >> kernel_config
+          cd ${{ env.G_WORKSPACE }}
           export OSRC_RELEASE="$(cat build_kernel.sh | grep SEC_BUILDNUMBER | tail | sed 's/^export SEC_BUILDNUMBER\=\"//' | sed 's/\"$//' | sed 's/ogki//')"
-          echo "osrc_release=$OSRC_RELEASE" >> $GITHUB_ENV
           export VERSION="$(cat "${{ env.G_KERNEL }}/Makefile" | grep 'VERSION = ' | head -n 1 | sed 's/VERSION = //')"
           export PATCHLEVEL="$(cat "${{ env.G_KERNEL }}/Makefile" | grep 'PATCHLEVEL = ' | head -n 1 | sed 's/PATCHLEVEL = //')"
           export SUBLEVEL="$(cat "${{ env.G_KERNEL }}/Makefile" | grep 'SUBLEVEL = ' | head -n 1 | sed 's/SUBLEVEL = //')"
           export KERNEL_VERSION="$VERSION.$PATCHLEVEL.$SUBLEVEL"
-          echo "kernel_release=$KERNEL_VERSION" >> $GITHUB_ENV
           export ASB_LEVEL="$(cat "${{ env.G_KERNEL }}/build.config.common" | grep ASB_SPL | tail | sed 's/^ASB_SPL\=//')"
-          echo "asb_level=$ASB_LEVEL" >> $GITHUB_ENV
-          echo "osrc_release=$OSRC_RELEASE" >> build_info.txt
-          echo "asb_level=$ASB_LEVEL" >> build_info.txt
-          echo "kernel_release=$KERNEL_VERSION" >> build_info.txt
-          echo "ksu_variant=${{ env.KSU_VAR }}" >> build_info.txt
-          echo "$(grep 'BRANCH=' "${{ env.G_KERNEL }}/build.config.common")" >> build_info.txt
-          echo "$(grep 'KMI_GENERATION=' "${{ env.G_KERNEL }}/build.config.common")" >> build_info.txt
+          export PKG_NAME="${{ env.KSU_VAR }}_a34x_${KERNEL_VERSION}_${ASB_LEVEL}_${OSRC_RELEASE}"
+          echo "pkg_name=$PKG_NAME" >> $GITHUB_ENV
 
-      - name: Compute release filename
-        run: |
-          echo "pkg_name=${{ env.KSU_VAR }}_a34x_${{ env.kernel_release }}_${{ env.asb_level }}_${{ env.osrc_release }}" >> $GITHUB_ENV
-
-      - name: Build AnyKernel3 zip
-        run: |
-          cp Image ${{ env.G_EXT }}/AnyKernel3/Image
+          cp out/target/product/a34x/obj/KLEAF_OBJ/dist/kernel_device_modules-6.6/mgk_64_k66_kernel_aarch64.user/Image ${{ env.G_EXT }}/AnyKernel3/Image
           cd ${{ env.G_EXT }}/AnyKernel3
           sed -i 's/device.name1=.*/device.name1=a34x/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=a34xdd/' anykernel.sh
@@ -233,21 +254,10 @@ jobs:
           sed -i 's/is_slot_device=.*/is_slot_device=auto;/' anykernel.sh
           sed -i 's/dump_boot;/split_boot;/g' anykernel.sh
           sed -i 's/write_boot;/flash_boot;/g' anykernel.sh
-          ZIP_NAME="AnyKernel3_${{ env.pkg_name }}.zip"
+          
+          ZIP_NAME="AnyKernel3_${PKG_NAME}.zip"
           zip -r9 "${{ env.G_WORKSPACE }}/$ZIP_NAME" * -x .git README.md *placeholder
           echo "zip_name=$ZIP_NAME" >> $GITHUB_ENV
-
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-dir-${{ env.KSU_VAR }}
-          path: dist
-
-      - name: Upload Image artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-image-${{ env.KSU_VAR }}
-          path: Image
 
       - name: Upload AnyKernel3 zip artifact
         uses: actions/upload-artifact@v4
@@ -262,14 +272,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: "${{ env.pkg_name }}"
-          name: "${{ env.KSU_VAR }} - ${{ env.kernel_release }} - ${{ env.asb_level }} - ${{ env.osrc_release }}"
-          files: |
-            Image
-            Image.sha256sum
-            dist.tar.gz
-            kernel_config
-            build_info.txt
-            ${{ env.zip_name }}
+          name: "${{ env.KSU_VAR }} - Kernel"
+          files: ${{ env.zip_name }}
 
       - name: Telegram Notification
         if: github.event.inputs.telegram == 'true'
