@@ -83,7 +83,7 @@ jobs:
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # Download requested Root Manager source
+          # Download requested Root Manager source into drivers/kernelsu
           case "${{ env.KSU_VAR }}" in
             KSU*)
               curl -fLSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
@@ -117,11 +117,8 @@ jobs:
           patch -p1 -d drivers/kernelsu < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
           
           # 3. Flawless C Compiler Fixes (Prevents Bazel -Werror panics)
-          # Inject Weak Dummy Variables into init.c
-          sed -i '1i#include <linux/types.h>' drivers/kernelsu/core/init.c || true
-          sed -i '1i__attribute__((weak)) bool ksu_late_loaded = false;' drivers/kernelsu/core/init.c || true
-          sed -i '1i__attribute__((weak)) void ksu_lsm_hook_init(void) {}' drivers/kernelsu/core/init.c || true
-          sed -i '1i__attribute__((weak)) void ksu_lsm_hook_exit(void) {}' drivers/kernelsu/core/init.c || true
+          # Inject Weak Dummy Variables into init.c to satisfy strict linking
+          sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' drivers/kernelsu/core/init.c || true
           sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c || true
           sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c || true
           
@@ -129,7 +126,7 @@ jobs:
           sed -i '/ksu_sulog_capture_sucompat/d' drivers/kernelsu/feature/sucompat.c || true
           
           # Ensure struct visibility in header
-          sed -i '1istruct user_arg_ptr;' drivers/kernelsu/sulog/event.h || true
+          sed -i '1s/^/struct user_arg_ptr;\n/' drivers/kernelsu/sulog/event.h || true
 
       - name: Patch Bazel (Kleaf) Sandboxing & Overrides
         if: ${{ env.KSU_VAR != 'NO-ROOT' }}
@@ -215,21 +212,22 @@ jobs:
           done
 
       - name: Execute Bazel Build
+        working-directory: ${{ env.G_WORKSPACE }}
         run: |
-          cd ${{ env.G_KERNEL }}
-          KBUILD_FILE="drivers/kernelsu/Kbuild"
+          KBUILD_FILE="${{ env.G_KERNEL }}/drivers/kernelsu/Kbuild"
           if [ -f "$KBUILD_FILE" ]; then
             sed -i "s/KSU_VERSION_FALLBACK := [0-9]\+/KSU_VERSION_FALLBACK := ${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
             sed -i "s/KSU_VERSION_TAG_FALLBACK := .*/KSU_VERSION_TAG_FALLBACK := ${{ env.KSU_GIT_TAG }}/" "$KBUILD_FILE"
             sed -i "s/-DKSU_VERSION=[0-9]\+/-DKSU_VERSION=${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
           fi
           
-          chmod +x ../build_kernel.sh
-          bash ../build_kernel.sh
+          # Strictly execute from root workspace to protect internal pathing
+          chmod +x build_kernel.sh
+          bash build_kernel.sh
 
       - name: Extract Artifacts & Package AnyKernel3
+        working-directory: ${{ env.G_WORKSPACE }}
         run: |
-          cd ${{ env.G_WORKSPACE }}
           export OSRC_RELEASE="$(cat build_kernel.sh | grep SEC_BUILDNUMBER | tail | sed 's/^export SEC_BUILDNUMBER\=\"//' | sed 's/\"$//' | sed 's/ogki//')"
           export VERSION="$(cat "${{ env.G_KERNEL }}/Makefile" | grep 'VERSION = ' | head -n 1 | sed 's/VERSION = //')"
           export PATCHLEVEL="$(cat "${{ env.G_KERNEL }}/Makefile" | grep 'PATCHLEVEL = ' | head -n 1 | sed 's/PATCHLEVEL = //')"
