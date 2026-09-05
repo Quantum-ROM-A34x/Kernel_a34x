@@ -93,6 +93,8 @@ jobs:
               ;;
             RESUKISU*)
               curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
+              # Fix ReSukiSU source code bug in kernel_umount.c
+              sed -i '/\.set_handler = kernel_umount_feature_set,/d' drivers/kernelsu/feature/kernel_umount.c || true
               ;;
           esac
 
