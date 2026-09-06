@@ -1,4 +1,5 @@
 name: Build Kernel (Unified KSU / KSUN / ReSukiSU)
+# Maintainer: Yazdan Irfan
 
 on:
   push:
@@ -222,6 +223,10 @@ jobs:
             sed -i "s/KSU_VERSION_TAG_FALLBACK := .*/KSU_VERSION_TAG_FALLBACK := ${{ env.KSU_GIT_TAG }}/" "$KBUILD_FILE"
             sed -i "s/-DKSU_VERSION=[0-9]\+/-DKSU_VERSION=${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
           fi
+          
+          # Disable ThinLTO to prevent Kprobe symbol mangling (fixes "Not installed" error)
+          sed -i 's/export LTO="thin"/export LTO="none"/g' build_kernel.sh
+          sed -i 's/--config=thinlto//g' build_kernel.sh
           
           # Strictly execute from root workspace to protect internal pathing
           chmod +x build_kernel.sh
