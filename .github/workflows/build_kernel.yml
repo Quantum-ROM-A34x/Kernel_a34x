@@ -1,5 +1,5 @@
 name: Build Kernel (Unified KSU / KSUN / ReSukiSU)
-# Maintainer: Yazdan Irfan
+# Maintainer: Yazdan Irfan 
 
 on:
   push:
@@ -155,15 +155,24 @@ jobs:
             echo "ccflags-y += -Wno-error" >> drivers/kernelsu/Makefile
           fi
 
-      - name: Inject Unified Configuration Fragment
+      - name: Force Compile KernelSU & Kprobes (Nuclear Option)
         if: ${{ env.KSU_VAR != 'NO-ROOT' }}
         run: |
           cd ${{ env.G_KERNEL }}
+          
+          # 1. Force the kernel to compile drivers/kernelsu regardless of config files
+          sed -i 's/obj-$(CONFIG_KSU) += kernelsu\//obj-y += kernelsu\//g' drivers/Makefile || true
+          
+          # 2. Inject CONFIG_KSU=1 into the compiler flags so the KSUN source activates
+          sed -i '1s/^/ccflags-y += -DCONFIG_KSU=1\n/' drivers/kernelsu/Makefile || true
+          
           cat << 'EOF' > ksu_fragment.config
           CONFIG_KSU=y
           CONFIG_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
           CONFIG_MODULES=y
+          CONFIG_KALLSYMS=y
+          CONFIG_KALLSYMS_ALL=y
           CONFIG_IP_SET=y
           CONFIG_IP_SET_MAX=65534
           CONFIG_IP_SET_BITMAP_IP=y
@@ -210,9 +219,11 @@ jobs:
           EOF
           fi
 
-          find . -type f \( -name "gki_defconfig" -o -name "mediatek-bazel_defconfig" -o -name "sec_ogki_fragment.config" -o -name "mt6877_overlay.config" -o -name "mt6877_teegris_5_overlay.config" \) | while read -r config_file; do
-            cat ksu_fragment.config >> "$config_file"
-          done
+          # 3. Blanket inject into every single ARM64 config in the source tree
+          find arch/arm64/configs -type f -exec sh -c 'cat ksu_fragment.config >> "$1"' _ {} \;
+          
+          # 4. Blanket inject into any top-level configs
+          find . -maxdepth 1 -type f -name "*defconfig*" -exec sh -c 'cat ksu_fragment.config >> "$1"' _ {} \;
 
       - name: Execute Bazel Build
         working-directory: ${{ env.G_WORKSPACE }}
