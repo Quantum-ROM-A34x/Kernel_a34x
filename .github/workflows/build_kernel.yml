@@ -250,10 +250,10 @@ jobs:
           sed -i 's/device.name7=.*/device.name7=SM-A346M/' anykernel.sh
           sed -i 's/device.name8=.*/device.name8=SM-A346N/' anykernel.sh
           sed -i 's/device.name9=.*/device.name9=SM-A3460/' anykernel.sh
-          sed -i 's/block=.*/block=auto;/' anykernel.sh
+          
+          # Fix AnyKernel3 Block & Flashing logic for raw Image unpacking/repacking
+          sed -i 's|block=.*|block=/dev/block/by-name/boot;|' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=auto;/' anykernel.sh
-          sed -i 's/dump_boot;/split_boot;/g' anykernel.sh
-          sed -i 's/write_boot;/flash_boot;/g' anykernel.sh
           
           ZIP_NAME="AnyKernel3_${PKG_NAME}.zip"
           zip -r9 "${{ env.G_WORKSPACE }}/$ZIP_NAME" * -x .git README.md *placeholder
