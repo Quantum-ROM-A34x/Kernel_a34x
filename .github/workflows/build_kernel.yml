@@ -75,11 +75,11 @@ jobs:
           echo "KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.5")" >> $GITHUB_ENV
           echo "KSU_VERSION=$((30000 + KSU_GIT_VERSION))" >> $GITHUB_ENV
 
-      - name: Apply SUSFS & KernelSU-Next Integration
+      - name: Apply SUSFS Kernel Patches
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # 1. Copy SUSFS core kernel files and headers
+          # 1. Copy SUSFS core kernel files and headers into the tree
           cp -rf ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* include/linux/
           cp -rf ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* fs/
           
@@ -87,20 +87,9 @@ jobs:
           patch -p1 -N < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
           patch -p1 -N < ${{ env.G_EXT }}/patch/6.6/Dont_reduce_TTL.patch || true
           
-          # 3. Apply SUSFS patch to KernelSU-Next (matching patch path structure)
-          if [ -d "${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU-Next" ]; then
-            KSUN_PATCH=$(find ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU-Next -name "*.patch" | head -n 1)
-            patch -p1 -N -d drivers/kernelsu < "$KSUN_PATCH" || patch -p2 -N -d drivers/kernelsu < "$KSUN_PATCH" || true
-          elif [ -f "${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
-            patch -p2 -N -d drivers/kernelsu < "${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
-          fi
-          
-          # 4. Compiler compatibility and strict symbol resolution fixes
+          # 3. Kleaf symbol safety fixes
           sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' drivers/kernelsu/core/init.c 2>/dev/null || true
-          sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c 2>/dev/null || true
-          sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c 2>/dev/null || true
           sed -i '/ksu_sulog_capture_sucompat/d' drivers/kernelsu/feature/sucompat.c 2>/dev/null || true
-          sed -i '1s/^/struct user_arg_ptr;\n/' drivers/kernelsu/sulog/event.h 2>/dev/null || true
 
       - name: Patch Bazel Visibility & Link Constraints
         run: |
@@ -118,9 +107,9 @@ jobs:
           done
           find . -iname "abi_gki_protected_exports*" -delete 2>/dev/null || true
           
-          # Disable fatal compiler warnings for KSU modules
+          # Suppress strict implicit declaration and LTO warnings for KSUN modules
           if [ -f "drivers/kernelsu/Makefile" ]; then
-            echo "ccflags-y += -fno-lto -fno-data-sections -fno-function-sections -Wno-error" >> drivers/kernelsu/Makefile
+            echo "ccflags-y += -fno-lto -fno-data-sections -fno-function-sections -Wno-error -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration" >> drivers/kernelsu/Makefile
           fi
 
       - name: Force Compile KernelSU & SUSFS Configs
@@ -193,7 +182,7 @@ jobs:
             sed -i "s/-DKSU_VERSION=[0-9]\+/-DKSU_VERSION=${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
           fi
           
-          # ThinLTO must be disabled to prevent kprobe function inlining
+          # ThinLTO must remain disabled to prevent kprobe inlining
           sed -i 's/export LTO="thin"/export LTO="none"/g' build_kernel.sh
           sed -i 's/--config=thinlto//g' build_kernel.sh
           
