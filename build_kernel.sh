@@ -42,10 +42,13 @@ sed -i "s/stable_scmversion_cmd = _get_status_at_path.*/stable_scmversion_cmd = 
 sed -i 's|SOURCE_DATE_EPOCH=0|SOURCE_DATE_EPOCH=\\"$(date +%s)\\"|' "kernel_device_modules-6.6/scripts/gen_build_config.py"
 sed -i "s/r510928/r536225/" "kernel-6.6/build.config.constants"
 
-# Inject KSU/SUSFS fragment into Mediatek overlay configurations before build.config generation
+# Append KSU/SUSFS config flags into active Mediatek overlay configs
 if [ -f "kernel-6.6/ksu_fragment.config" ]; then
   cat kernel-6.6/ksu_fragment.config >> kernel_device_modules-6.6/arch/arm64/configs/sec_ogki_fragment.config 2>/dev/null || true
   cat kernel-6.6/ksu_fragment.config >> kernel_device_modules-6.6/arch/arm64/configs/mt6877_overlay.config 2>/dev/null || true
+elif [ -f "/tmp/ksu_fragment.config" ]; then
+  cat /tmp/ksu_fragment.config >> kernel_device_modules-6.6/arch/arm64/configs/sec_ogki_fragment.config 2>/dev/null || true
+  cat /tmp/ksu_fragment.config >> kernel_device_modules-6.6/arch/arm64/configs/mt6877_overlay.config 2>/dev/null || true
 fi
 
 python kernel_device_modules-6.6/scripts/gen_build_config.py --kernel-defconfig mediatek-bazel_defconfig --kernel-defconfig-overlays "sec_ogki_fragment.config mt6877_overlay.config mt6877_teegris_5_overlay.config" --kernel-build-config-overlays "" -m user -o ../out/target/product/a34x/obj/KERNEL_OBJ/build.config
