@@ -63,54 +63,45 @@ jobs:
           git clone https://github.com/xnnnsets/patch.git
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android15-6.6
 
-      - name: Inject KernelSU-Next Source
+      - name: Setup KernelSU-Next (SUSFS Native Branch)
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # Setup KernelSU-Next into drivers/kernelsu
-          curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+          # Clone KernelSU-Next's dedicated next-susfs branch directly
+          mkdir -p drivers
+          rm -rf drivers/kernelsu
+          git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b next-susfs drivers/kernelsu || \
+          git clone https://github.com/rifsxd/KernelSU-Next.git -b next-susfs drivers/kernelsu
           
           cd drivers/kernelsu
           KSU_GIT_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "0")
           echo "KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.5")" >> $GITHUB_ENV
           echo "KSU_VERSION=$((30000 + KSU_GIT_VERSION))" >> $GITHUB_ENV
 
-      - name: Apply SUSFS & KernelSU-Next Patches
+      - name: Apply SUSFS Kernel Patches
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # 1. Copy core SUSFS headers and files into the kernel tree
-          cp -r ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* include/linux/
-          cp -r ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* fs/
+          # 1. Copy SUSFS core kernel files and headers
+          cp -rf ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* include/linux/
+          cp -rf ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* fs/
           
           # 2. Patch kernel subsystems for SUSFS
-          patch -p1 < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
-          patch -p1 < ${{ env.G_EXT }}/patch/6.6/Dont_reduce_TTL.patch || true
+          patch -p1 -N < ${{ env.G_EXT }}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch || true
+          patch -p1 -N < ${{ env.G_EXT }}/patch/6.6/Dont_reduce_TTL.patch || true
           
-          # 3. Patch KernelSU-Next for SUSFS support (auto-fallback across patch levels)
-          if [ -d "${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU-Next" ]; then
-            KSUN_PATCH=$(find ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU-Next -name "*.patch" | head -n 1)
-            patch -p2 -d drivers/kernelsu < "$KSUN_PATCH" || patch -p1 -d drivers/kernelsu < "$KSUN_PATCH" || true
-          else
-            KSU_PATCH=$(find ${{ env.G_EXT }}/susfs4ksu/kernel_patches/KernelSU -name "*10_enable_susfs_for_ksu.patch" | head -n 1)
-            patch -p2 -d drivers/kernelsu < "$KSU_PATCH" || patch -p1 -d drivers/kernelsu < "$KSU_PATCH" || true
-          fi
-          
-          # 4. Strict link and symbol fixes to prevent Kleaf build breakage
+          # 3. Kleaf symbol safety fixes
           sed -i '1s/^/#include <linux\/types.h>\n__attribute__((weak)) bool ksu_late_loaded = false;\n__attribute__((weak)) void ksu_lsm_hook_init(void) {}\n__attribute__((weak)) void ksu_lsm_hook_exit(void) {}\n/' drivers/kernelsu/core/init.c || true
-          sed -i 's/ksu_syscall_hook_manager_init/ksu_syscall_hook_init/g' drivers/kernelsu/core/init.c || true
-          sed -i 's/ksu_syscall_hook_manager_exit/ksu_syscall_hook_exit/g' drivers/kernelsu/core/init.c || true
-          sed -i '/ksu_sulog_capture_sucompat/d' drivers/kernelsu/feature/sucompat.c || true
-          sed -i '1s/^/struct user_arg_ptr;\n/' drivers/kernelsu/sulog/event.h || true
+          sed -i '/ksu_sulog_capture_sucompat/d' drivers/kernelsu/feature/sucompat.c 2>/dev/null || true
 
-      - name: Patch Bazel Visibility & Build Constraints
+      - name: Patch Bazel Visibility & Link Constraints
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # Ensure drivers/kernelsu and fs/susfs are part of Bazel sandbox
+          # Expose drivers/kernelsu and fs/susfs to the Bazel sandbox
           if [ -f "BUILD.bazel" ]; then
-            sed -i '/"drivers\/\*\*"/a\        "drivers/kernelsu/**",\n        "fs/kernelsu/**",' BUILD.bazel 2>/dev/null || true
-            sed -i '/"drivers\/md\/\*\*"/a\        "drivers/kernelsu/**",\n        "fs/kernelsu/**",' BUILD.bazel 2>/dev/null || true
+            sed -i '/"drivers\/\*\*"/a\        "drivers/kernelsu/**",\n        "fs/susfs/**",\n        "fs/sus_su.c",\n        "fs/susfs.c",\n        "include/linux/susfs.h",\n        "include/linux/susfs_def.h",' BUILD.bazel 2>/dev/null || true
+            sed -i '/"drivers\/md\/\*\*"/a\        "drivers/kernelsu/**",\n        "fs/susfs/**",\n        "fs/sus_su.c",\n        "fs/susfs.c",\n        "include/linux/susfs.h",\n        "include/linux/susfs_def.h",' BUILD.bazel 2>/dev/null || true
           fi
           
           # Strip GKI protected export restrictions
@@ -119,23 +110,23 @@ jobs:
           done
           find . -iname "abi_gki_protected_exports*" -delete 2>/dev/null || true
           
-          # Disable fatal compilation warnings on KSU modules
+          # Strip strict warnings for the KSU module
           if [ -f "drivers/kernelsu/Makefile" ]; then
-            echo "ccflags-y += -fno-lto" >> drivers/kernelsu/Makefile
-            echo "ccflags-y += -fno-data-sections" >> drivers/kernelsu/Makefile
-            echo "ccflags-y += -fno-function-sections" >> drivers/kernelsu/Makefile
-            echo "ccflags-y += -Wno-error" >> drivers/kernelsu/Makefile
+            echo "ccflags-y += -fno-lto -fno-data-sections -fno-function-sections -Wno-error" >> drivers/kernelsu/Makefile
           fi
 
       - name: Force Compile KernelSU & SUSFS Configs
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # Guarantee driver entry compilation even if Kconfig evaluates late
+          # Wire drivers/Makefile to compile drivers/kernelsu
           sed -i 's/obj-\$(CONFIG_KSU) += kernelsu\//obj-y += kernelsu\//g' drivers/Makefile || true
-          sed -i '1s/^/ccflags-y += -DCONFIG_KSU=1\n/' drivers/kernelsu/Makefile || true
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo "obj-y += kernelsu/" >> drivers/Makefile
+          fi
+          sed -i '1s/^/ccflags-y += -DCONFIG_KSU=1 -DCONFIG_KSU_SUSFS=1\n/' drivers/kernelsu/Makefile || true
           
-          cat << 'EOF' > ksu_fragment.config
+          cat << 'EOF' > /tmp/ksu_fragment.config
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -177,10 +168,11 @@ jobs:
           CONFIG_IP_SET_LIST_SET=y
           EOF
 
-          # Inject fragment into all arm64 config bases and workspace-level overlays
-          find arch/arm64/configs -type f -exec sh -c 'cat ksu_fragment.config >> "$1"' _ {} \;
-          find . -maxdepth 2 -type f \( -name "*defconfig*" -o -name "*overlay.config" -o -name "*fragment.config" \) -exec sh -c 'cat ksu_fragment.config >> "$1"' _ {} \;
-          find ${{ env.G_WORKSPACE }}/kernel -type f \( -name "*defconfig*" -o -name "*overlay.config" -o -name "*fragment.config" \) -exec sh -c 'cat ksu_fragment.config >> "$1"' _ {} \; 2>/dev/null || true
+          # Inject fragment into configs without self-referential overwrite
+          find arch/arm64/configs -type f -exec sh -c 'cat /tmp/ksu_fragment.config >> "$1"' _ {} \;
+          find . -maxdepth 2 -type f \( -name "*defconfig*" -o -name "*overlay.config" -o -name "*fragment.config" \) -exec sh -c 'cat /tmp/ksu_fragment.config >> "$1"' _ {} \;
+          find ${{ env.G_WORKSPACE }}/kernel -type f \( -name "*defconfig*" -o -name "*overlay.config" -o -name "*fragment.config" \) -exec sh -c 'cat /tmp/ksu_fragment.config >> "$1"' _ {} \; 2>/dev/null || true
+          cp /tmp/ksu_fragment.config ./ksu_fragment.config
 
       - name: Execute Bazel Build
         working-directory: ${{ env.G_WORKSPACE }}
@@ -192,7 +184,6 @@ jobs:
             sed -i "s/-DKSU_VERSION=[0-9]\+/-DKSU_VERSION=${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
           fi
           
-          # ThinLTO must remain disabled for reliable kprobe hooks on Android 15 GKI
           sed -i 's/export LTO="thin"/export LTO="none"/g' build_kernel.sh
           sed -i 's/--config=thinlto//g' build_kernel.sh
           
