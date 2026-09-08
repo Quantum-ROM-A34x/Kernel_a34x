@@ -3,7 +3,7 @@
 mkdir -p bin
 export PATH="$(pwd)/bin:$PATH"
 
-sudo apt-get install curl wget -y
+sudo apt-get install curl wget git -y
 
 curl https://storage.googleapis.com/git-repo-downloads/repo > bin/repo
 chmod a+x bin/repo
@@ -23,6 +23,12 @@ cat versions.bzl
 cd ..
 cd ../../../../
 ln -sfn "$(pwd)/prebuilts" "$(pwd)/../kernel/prebuilts"
+
+# Link AOSP toolchain profiles (AutoFDO profile directory) into the kernel workspace
+if [ -d "$(pwd)/toolchain/pgo-profiles" ]; then
+  ln -sfn "$(pwd)/toolchain/pgo-profiles" "$(pwd)/../kernel/toolchain/pgo-profiles"
+  ln -sfn "$(pwd)/toolchain/pgo-profiles" "$(pwd)/../kernel/kernel-6.6/toolchain/pgo-profiles"
+fi
 cd ..
 
 cd kernel
@@ -42,7 +48,7 @@ sed -i "s/stable_scmversion_cmd = _get_status_at_path.*/stable_scmversion_cmd = 
 sed -i 's|SOURCE_DATE_EPOCH=0|SOURCE_DATE_EPOCH=\\"$(date +%s)\\"|' "kernel_device_modules-6.6/scripts/gen_build_config.py"
 sed -i "s/r510928/r536225/" "kernel-6.6/build.config.constants"
 
-# Append KSU/SUSFS config flags into active Mediatek overlay configs
+# Append KSU/SUSFS/AutoFDO config flags into active Mediatek overlay configs
 if [ -f "kernel-6.6/ksu_fragment.config" ]; then
   cat kernel-6.6/ksu_fragment.config >> kernel_device_modules-6.6/arch/arm64/configs/sec_ogki_fragment.config 2>/dev/null || true
   cat kernel-6.6/ksu_fragment.config >> kernel_device_modules-6.6/arch/arm64/configs/mt6877_overlay.config 2>/dev/null || true
@@ -63,6 +69,7 @@ export MODE="user"
 export SOURCE_DATE_EPOCH="$(date +%s)"
 export SEC_BUILDNUMBER="ogkiA346BXXSFEZC7"
 
+# LTO remains 'none' to protect kprobes while AutoFDO optimizes branch targets
 export LTO="none"
 export BAZEL_FLAGS="--config=autofdo"
 
