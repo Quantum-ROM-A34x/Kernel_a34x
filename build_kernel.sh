@@ -11,6 +11,7 @@ chmod a+x bin/repo
 mkdir -p aosp-kernel && cd aosp-kernel
 repo init -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6 --depth=1
 repo sync -j$(nproc --all)
+
 cd prebuilts/clang/host/linux-x86
 wget -O clang-r536225.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main-kernel-2025/clang-r536225.tar.gz
 mkdir -p clang-r536225; cd clang-r536225
@@ -24,7 +25,7 @@ cd ..
 cd ../../../../
 ln -sfn "$(pwd)/prebuilts" "$(pwd)/../kernel/prebuilts"
 
-# Link AOSP toolchain profiles (AutoFDO profile directory) into the kernel workspace
+# Link AutoFDO profile repository directly into the kernel build workspace
 if [ -d "$(pwd)/toolchain/pgo-profiles" ]; then
   ln -sfn "$(pwd)/toolchain/pgo-profiles" "$(pwd)/../kernel/toolchain/pgo-profiles"
   ln -sfn "$(pwd)/toolchain/pgo-profiles" "$(pwd)/../kernel/kernel-6.6/toolchain/pgo-profiles"
@@ -48,7 +49,7 @@ sed -i "s/stable_scmversion_cmd = _get_status_at_path.*/stable_scmversion_cmd = 
 sed -i 's|SOURCE_DATE_EPOCH=0|SOURCE_DATE_EPOCH=\\"$(date +%s)\\"|' "kernel_device_modules-6.6/scripts/gen_build_config.py"
 sed -i "s/r510928/r536225/" "kernel-6.6/build.config.constants"
 
-# Append KSU/SUSFS/AutoFDO config flags into active Mediatek overlay configs
+# Append configuration fragment to Mediatek active overlays before build.config generation
 if [ -f "kernel-6.6/ksu_fragment.config" ]; then
   cat kernel-6.6/ksu_fragment.config >> kernel_device_modules-6.6/arch/arm64/configs/sec_ogki_fragment.config 2>/dev/null || true
   cat kernel-6.6/ksu_fragment.config >> kernel_device_modules-6.6/arch/arm64/configs/mt6877_overlay.config 2>/dev/null || true
@@ -69,8 +70,10 @@ export MODE="user"
 export SOURCE_DATE_EPOCH="$(date +%s)"
 export SEC_BUILDNUMBER="ogkiA346BXXSFEZC7"
 
-# LTO remains 'none' to protect kprobes while AutoFDO optimizes branch targets
+# LTO remains 'none' to safeguard kprobe symbols for KernelSU-Next
 export LTO="none"
+
+# Clean AutoFDO flag passed directly to Bazel (safely using Google default -O2 optimizations)
 export BAZEL_FLAGS="--config=autofdo"
 
 chmod +x ./kernel_device_modules-6.6/build.sh
