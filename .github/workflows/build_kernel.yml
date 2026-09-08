@@ -1,4 +1,4 @@
-name: Build Kernel (KSUN + SUSFS)
+name: Build Kernel (KSUN + SUSFS + AutoFDO)
 # Maintainer: Yazdan Irfan
 
 on:
@@ -67,7 +67,9 @@ jobs:
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # Initialize KernelSU-Next via official installer script
+          # Initialize KernelSU-Next
+          mkdir -p drivers
+          rm -rf drivers/kernelsu
           curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
           
           cd drivers/kernelsu
@@ -79,7 +81,7 @@ jobs:
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # 1. Copy SUSFS core kernel files and headers into the tree
+          # 1. Copy SUSFS core kernel files and headers
           cp -rf ${{ env.G_EXT }}/susfs4ksu/kernel_patches/include/linux/* include/linux/
           cp -rf ${{ env.G_EXT }}/susfs4ksu/kernel_patches/fs/* fs/
           
@@ -95,35 +97,34 @@ jobs:
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # Expose drivers/kernelsu and fs/susfs sources to Bazel sandboxing
+          # Expose drivers/kernelsu, fs/susfs, and toolchain profile files to Bazel sandboxing
           if [ -f "BUILD.bazel" ]; then
-            sed -i '/"drivers\/\*\*"/a\        "drivers/kernelsu/**",\n        "fs/susfs/**",\n        "fs/sus_su.c",\n        "fs/susfs.c",\n        "include/linux/susfs.h",\n        "include/linux/susfs_def.h",' BUILD.bazel 2>/dev/null || true
-            sed -i '/"drivers\/md\/\*\*"/a\        "drivers/kernelsu/**",\n        "fs/susfs/**",\n        "fs/sus_su.c",\n        "fs/susfs.c",\n        "include/linux/susfs.h",\n        "include/linux/susfs_def.h",' BUILD.bazel 2>/dev/null || true
+            sed -i '/"drivers\/\*\*"/a\        "drivers/kernelsu/**",\n        "fs/susfs/**",\n        "fs/sus_su.c",\n        "fs/susfs.c",\n        "include/linux/susfs.h",\n        "include/linux/susfs_def.h",\n        "toolchain/pgo-profiles/**",' BUILD.bazel 2>/dev/null || true
+            sed -i '/"drivers\/md\/\*\*"/a\        "drivers/kernelsu/**",\n        "fs/susfs/**",\n        "fs/sus_su.c",\n        "fs/susfs.c",\n        "include/linux/susfs.h",\n        "include/linux/susfs_def.h",\n        "toolchain/pgo-profiles/**",' BUILD.bazel 2>/dev/null || true
           fi
           
-          # Remove protected ABI export lists preventing non-GKI symbol linking
+          # Remove protected ABI export lists
           grep -rl "protected_exports_list" --include="BUILD.bazel" . 2>/dev/null | while read -r f; do
             sed -i '/"protected_exports_list"\s*:\s*"android\/abi_gki_protected_exports_aarch64",\?/d' "$f"
           done
           find . -iname "abi_gki_protected_exports*" -delete 2>/dev/null || true
           
-          # Suppress strict implicit declaration and LTO warnings for KSUN modules
+          # Prevent strict compiler flags from breaking KSU
           if [ -f "drivers/kernelsu/Makefile" ]; then
             echo "ccflags-y += -fno-lto -fno-data-sections -fno-function-sections -Wno-error -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration" >> drivers/kernelsu/Makefile
           fi
 
-      - name: Force Compile KernelSU & SUSFS Configs
+      - name: Force Compile KernelSU, SUSFS & AutoFDO Configs
         run: |
           cd ${{ env.G_KERNEL }}
           
-          # Enforce compilation of drivers/kernelsu unconditionally
+          # Force drivers/Makefile to compile kernelsu
           sed -i 's/obj-\$(CONFIG_KSU) += kernelsu\//obj-y += kernelsu\//g' drivers/Makefile || true
           if ! grep -q "kernelsu" drivers/Makefile; then
             echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
           sed -i '1s/^/ccflags-y += -DCONFIG_KSU=1 -DCONFIG_KSU_SUSFS=1\n/' drivers/kernelsu/Makefile || true
           
-          # Write configuration fragment to an isolated directory to avoid recursive injection loops
           cat << 'EOF' > /tmp/ksu_fragment.config
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
@@ -164,6 +165,7 @@ jobs:
           CONFIG_IP_SET_HASH_NETPORT=y
           CONFIG_IP_SET_HASH_NETIFACE=y
           CONFIG_IP_SET_LIST_SET=y
+          CONFIG_AUTOFDO_CLANG=y
           EOF
 
           # Inject fragment safely into all configuration targets
@@ -182,7 +184,7 @@ jobs:
             sed -i "s/-DKSU_VERSION=[0-9]\+/-DKSU_VERSION=${{ env.KSU_VERSION }}/" "$KBUILD_FILE"
           fi
           
-          # ThinLTO must remain disabled to prevent kprobe inlining
+          # Maintain LTO disabled so Kprobes can attach cleanly
           sed -i 's/export LTO="thin"/export LTO="none"/g' build_kernel.sh
           sed -i 's/--config=thinlto//g' build_kernel.sh
           
@@ -198,7 +200,7 @@ jobs:
           export SUBLEVEL="$(cat "${{ env.G_KERNEL }}/Makefile" | grep '^SUBLEVEL = ' | head -n 1 | sed 's/SUBLEVEL = //')"
           export KERNEL_VERSION="$VERSION.$PATCHLEVEL.$SUBLEVEL"
           export ASB_LEVEL="$(cat "${{ env.G_KERNEL }}/build.config.common" | grep ASB_SPL | tail -n 1 | sed 's/^ASB_SPL\=//')"
-          export PKG_NAME="KSUN_SUSFS_a34x_${KERNEL_VERSION}_${ASB_LEVEL}_${OSRC_RELEASE}"
+          export PKG_NAME="KSUN_SUSFS_AutoFDO_a34x_${KERNEL_VERSION}_${ASB_LEVEL}_${OSRC_RELEASE}"
           echo "pkg_name=$PKG_NAME" >> $GITHUB_ENV
 
           cp out/target/product/a34x/obj/KLEAF_OBJ/dist/kernel_device_modules-6.6/mgk_64_k66_kernel_aarch64.user/Image ${{ env.G_EXT }}/AnyKernel3/Image
@@ -223,7 +225,7 @@ jobs:
       - name: Upload AnyKernel3 zip artifact
         uses: actions/upload-artifact@v4
         with:
-          name: anykernel3-zip-KSUN-SUSFS
+          name: anykernel3-zip-KSUN-SUSFS-AutoFDO
           path: "${{ env.zip_name }}"
 
       - name: Upload release assets
@@ -233,7 +235,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: "${{ env.pkg_name }}"
-          name: "KSUN + SUSFS - Kernel"
+          name: "KSUN + SUSFS + AutoFDO - Kernel"
           files: ${{ env.zip_name }}
 
       - name: Telegram Notification
@@ -242,5 +244,5 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
             -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
             -F document=@"${{ env.zip_name }}" \
-            -F caption="Build success — KSUN + SUSFS — ${{ github.sha }}" \
+            -F caption="Build success — KSUN + SUSFS + AutoFDO — ${{ github.sha }}" \
             -F parse_mode="Markdown"
